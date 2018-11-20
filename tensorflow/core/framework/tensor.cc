@@ -752,6 +752,13 @@ Tensor::Tensor(Allocator* a, DataType type, const TensorShape& shape,
 Tensor::Tensor(DataType type, const TensorShape& shape)
     : Tensor(cpu_allocator(), type, shape) {}
 
+void Tensor::HostScalarTensorBufferBase::FillAllocationDescription(
+    AllocationDescription* proto) const {
+  proto->set_requested_bytes(size());
+  proto->set_allocator_name("HostScalarTensorBuffer");
+  proto->set_ptr(reinterpret_cast<uintptr_t>(data()));
+}
+
 template <typename T>
 class SubBuffer : public TensorBuffer {
  public:
@@ -804,6 +811,28 @@ Tensor Tensor::Slice(int64 start, int64 limit) const {
     dim0_size = limit - start;
     ret.shape_.set_dim(0, dim0_size);
     const int64 num_elems = dim0_size * elems_per_dim0;
+    if (buf_) {
+      DataType dt = dtype();
+      CASES(dt, ret.buf_ = new SubBuffer<T>(buf_, delta, num_elems));
+    }
+  }
+  return ret;
+}
+
+Tensor Tensor::SubSlice(int64 index) const {
+  CHECK_GE(dims(), 1);  // Crash ok.
+  CHECK_LE(0, index);   // Crash ok.
+  int64 dim0_size = shape_.dim_size(0);
+  CHECK_LE(index, dim0_size);  // Crash ok.
+  Tensor ret;
+  ret.shape_ = shape_;
+  ret.shape_.RemoveDim(0);
+  ret.set_dtype(dtype());
+  ret.buf_ = nullptr;
+  if (dim0_size > 0) {
+    const int64 elems_per_dim0 = NumElements() / dim0_size;
+    const int64 delta = index * elems_per_dim0;
+    const int64 num_elems = elems_per_dim0;
     if (buf_) {
       DataType dt = dtype();
       CASES(dt, ret.buf_ = new SubBuffer<T>(buf_, delta, num_elems));

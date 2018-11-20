@@ -18,6 +18,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from tensorflow.python import pywrap_tensorflow
 from tensorflow.python.eager import context
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
@@ -42,11 +43,11 @@ class MovingAveragesTest(test.TestCase):
       assign = moving_averages.assign_moving_average(
           var, val, decay, zero_debias=False)
       variables.global_variables_initializer().run()
-      self.assertAllClose([10.0, 11.0], var.eval())
+      self.assertAllClose([10.0, 11.0], self.evaluate(var))
       assign.op.run()
       self.assertAllClose(
           [10.0 * 0.25 + 1.0 * (1.0 - 0.25), 11.0 * 0.25 + 2.0 * (1.0 - 0.25)],
-          var.eval())
+          self.evaluate(var))
 
   def testAssignMovingAverage(self):
     with self.cached_session():
@@ -55,11 +56,11 @@ class MovingAveragesTest(test.TestCase):
       decay = 0.25
       assign = moving_averages.assign_moving_average(var, val, decay)
       variables.global_variables_initializer().run()
-      self.assertAllClose([0.0, 0.0], var.eval())
+      self.assertAllClose([0.0, 0.0], self.evaluate(var))
       assign.op.run()
-      self.assertAllClose([
-          1.0 * (1.0 - 0.25) / (1 - 0.25), 2.0 * (1.0 - 0.25) / (1 - 0.25)
-      ], var.eval())
+      self.assertAllClose(
+          [1.0 * (1.0 - 0.25) / (1 - 0.25), 2.0 * (1.0 - 0.25) / (1 - 0.25)],
+          self.evaluate(var))
 
   def testAssignMovingAverageNewNamingMultipleCalls(self):
     with variable_scope.variable_scope("scope1") as vs1:
@@ -110,6 +111,32 @@ class MovingAveragesTest(test.TestCase):
       denominator_2 = denominator_1 * decay + weight_2 * (1.0 - decay)
       self.assertAllClose(numerator_2 / denominator_2, wma_array)
 
+  def testWeightedMovingAverageBfloat16(self):
+    bfloat16 = pywrap_tensorflow.TF_bfloat16_type()
+    with self.cached_session() as sess:
+      decay = 0.5
+      weight = array_ops.placeholder(dtypes.bfloat16, [])
+      val = array_ops.placeholder(dtypes.bfloat16, [])
+
+      wma = moving_averages.weighted_moving_average(val, decay, weight)
+      variables.global_variables_initializer().run()
+
+      # Get the first weighted moving average.
+      val_1 = 3.0
+      weight_1 = 4.0
+      wma_array = sess.run(wma, feed_dict={val: val_1, weight: weight_1})
+      numerator_1 = val_1 * weight_1 * (1.0 - decay)
+      denominator_1 = weight_1 * (1.0 - decay)
+      self.assertAllClose(numerator_1 / denominator_1, wma_array)
+
+      # Get the second weighted moving average.
+      val_2 = 11.0
+      weight_2 = 22.0
+      wma_array = sess.run(wma, feed_dict={val: val_2, weight: weight_2})
+      numerator_2 = numerator_1 * decay + val_2 * weight_2 * (1.0 - decay)
+      denominator_2 = denominator_1 * decay + weight_2 * (1.0 - decay)
+      self.assertAllClose(bfloat16(numerator_2 / denominator_2), wma_array)
+
 
 def _Repeat(value, dim):
   if dim == 1:
@@ -152,39 +179,39 @@ class ExponentialMovingAverageTest(test.TestCase):
     self.assertEqual("add/ExponentialMovingAverage:0", avg2.name)
 
     # Check initial values.
-    self.assertAllClose(tens, var0.eval())
-    self.assertAllClose(thirties, var1.eval())
-    self.assertAllClose(_Repeat(10.0 + 30.0, dim), tensor2.eval())
+    self.assertAllClose(tens, self.evaluate(var0))
+    self.assertAllClose(thirties, self.evaluate(var1))
+    self.assertAllClose(_Repeat(10.0 + 30.0, dim), self.evaluate(tensor2))
 
     # Check that averages are initialized correctly.
-    self.assertAllClose(tens, avg0.eval())
-    self.assertAllClose(thirties, avg1.eval())
+    self.assertAllClose(tens, self.evaluate(avg0))
+    self.assertAllClose(thirties, self.evaluate(avg1))
     # Note that averages of Tensor's initialize to zeros_like since no value
     # of the Tensor is known because the Op has not been run (yet).
-    self.assertAllClose(_Repeat(0.0, dim), avg2.eval())
+    self.assertAllClose(_Repeat(0.0, dim), self.evaluate(avg2))
 
     # Update the averages and check.
     update.run()
     dk = actual_decay
 
     expected = _Repeat(10.0 * dk + 10.0 * (1 - dk), dim)
-    self.assertAllClose(expected, avg0.eval())
+    self.assertAllClose(expected, self.evaluate(avg0))
     expected = _Repeat(30.0 * dk + 30.0 * (1 - dk), dim)
-    self.assertAllClose(expected, avg1.eval())
+    self.assertAllClose(expected, self.evaluate(avg1))
     expected = _Repeat(0.0 * dk + (10.0 + 30.0) * (1 - dk) / _Scale(dk, 1), dim)
-    self.assertAllClose(expected, avg2.eval())
+    self.assertAllClose(expected, self.evaluate(avg2))
 
     # Again, update the averages and check.
     update.run()
     expected = _Repeat((10.0 * dk + 10.0 * (1 - dk)) * dk + 10.0 * (1 - dk),
                        dim)
-    self.assertAllClose(expected, avg0.eval())
+    self.assertAllClose(expected, self.evaluate(avg0))
     expected = _Repeat((30.0 * dk + 30.0 * (1 - dk)) * dk + 30.0 * (1 - dk),
                        dim)
-    self.assertAllClose(expected, avg1.eval())
+    self.assertAllClose(expected, self.evaluate(avg1))
     expected = _Repeat(((0.0 * dk + (10.0 + 30.0) * (1 - dk)) * dk +
                         (10.0 + 30.0) * (1 - dk)) / _Scale(dk, 2), dim)
-    self.assertAllClose(expected, avg2.eval())
+    self.assertAllClose(expected, self.evaluate(avg2))
 
   def testAverageVariablesNoNumUpdates_Scalar(self):
     with self.cached_session():
@@ -247,14 +274,14 @@ class ExponentialMovingAverageTest(test.TestCase):
       self.assertEqual([], v1_avg.value().op.control_inputs)
       self.assertEqual([], v1_avg.value().op.control_inputs)
       # We should be able to initialize v1_avg before v0.
-      sess.run(v1_avg.initializer)
-      sess.run(v0.initializer)
-      self.assertEqual([10.0], sess.run(v1_avg))
+      self.evaluate(v1_avg.initializer)
+      self.evaluate(v0.initializer)
+      self.assertEqual([10.0], self.evaluate(v1_avg))
       # running ema_op should add to v0 (in addition to updating v1_avg)
       sess.run(assign_to_v1)
-      sess.run(ema_op)
-      self.assertEqual(1, sess.run(v0))
-      self.assertEqual([17.5], sess.run(v1_avg))
+      self.evaluate(ema_op)
+      self.assertEqual(1, self.evaluate(v0))
+      self.assertEqual([17.5], self.evaluate(v1_avg))
 
   @test_util.run_in_graph_and_eager_modes
   def testBasicEager(self):

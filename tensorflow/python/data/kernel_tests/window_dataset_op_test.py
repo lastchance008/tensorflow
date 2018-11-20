@@ -20,6 +20,7 @@ from __future__ import print_function
 from absl.testing import parameterized
 import numpy as np
 
+from tensorflow.python.data.kernel_tests import test_base
 from tensorflow.python.data.ops import dataset_ops
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import errors
@@ -29,7 +30,7 @@ from tensorflow.python.ops import math_ops
 from tensorflow.python.platform import test
 
 
-class WindowDatasetTest(test.TestCase, parameterized.TestCase):
+class WindowDatasetTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @parameterized.named_parameters(
       ("1", 20, 14, 7, 1),
@@ -101,7 +102,7 @@ class WindowDatasetTest(test.TestCase, parameterized.TestCase):
       num_full_batches = max(
           0, (count * 7 - ((size - 1) * stride + 1)) // shift + 1)
       for i in range(num_full_batches):
-        result = sess.run(get_next)
+        result = self.evaluate(get_next)
         for component, result_component in zip(components, result):
           for j in range(size):
             self.assertAllEqual(component[(i * shift + j * stride) % 7]**2,
@@ -110,7 +111,7 @@ class WindowDatasetTest(test.TestCase, parameterized.TestCase):
         num_partial_batches = (count * 7) // shift + (
             (count * 7) % shift > 0) - num_full_batches
         for i in range(num_partial_batches):
-          result = sess.run(get_next)
+          result = self.evaluate(get_next)
           for component, result_component in zip(components, result):
             remaining = (count * 7) - ((num_full_batches + i) * shift)
             num_elements = remaining // stride + ((remaining % stride) > 0)
@@ -150,11 +151,6 @@ class WindowDatasetTest(test.TestCase, parameterized.TestCase):
                 stride_t: stride
             })
 
-  def assertSparseValuesEqual(self, a, b):
-    self.assertAllEqual(a.indices, b.indices)
-    self.assertAllEqual(a.values, b.values)
-    self.assertAllEqual(a.dense_shape, b.dense_shape)
-
   def testWindowSparse(self):
 
     def _sparse(i):
@@ -168,10 +164,10 @@ class WindowDatasetTest(test.TestCase, parameterized.TestCase):
     get_next = iterator.get_next()
 
     with self.cached_session() as sess:
-      sess.run(init_op)
+      self.evaluate(init_op)
       num_batches = (10 - 5) // 3 + 1
       for i in range(num_batches):
-        actual = sess.run(get_next)
+        actual = self.evaluate(get_next)
         expected = sparse_tensor.SparseTensorValue(
             indices=[[0, 0], [1, 0], [2, 0], [3, 0], [4, 0]],
             values=[i * 3, i * 3 + 1, i * 3 + 2, i * 3 + 3, i * 3 + 4],
@@ -197,10 +193,10 @@ class WindowDatasetTest(test.TestCase, parameterized.TestCase):
     get_next = iterator.get_next()
 
     with self.cached_session() as sess:
-      sess.run(init_op)
+      self.evaluate(init_op)
       num_batches = (10 - 5) // 3 + 1
       for i in range(num_batches):
-        actual = sess.run(get_next)
+        actual = self.evaluate(get_next)
         expected_indices = []
         expected_values = []
         for j in range(5):
@@ -231,9 +227,9 @@ class WindowDatasetTest(test.TestCase, parameterized.TestCase):
     get_next = iterator.get_next()
 
     with self.cached_session() as sess:
-      sess.run(init_op)
+      self.evaluate(init_op)
       # Slide: 1st batch.
-      actual = sess.run(get_next)
+      actual = self.evaluate(get_next)
       expected = sparse_tensor.SparseTensorValue(
           indices=[[0, 0, 0], [0, 1, 0], [0, 2, 0], [0, 3, 0], [1, 0, 0],
                    [1, 1, 0], [1, 2, 0], [1, 3, 0], [2, 0, 0], [2, 1, 0],
@@ -243,7 +239,7 @@ class WindowDatasetTest(test.TestCase, parameterized.TestCase):
       self.assertTrue(sparse_tensor.is_sparse(actual))
       self.assertSparseValuesEqual(actual, expected)
       # Slide: 2nd batch.
-      actual = sess.run(get_next)
+      actual = self.evaluate(get_next)
       expected = sparse_tensor.SparseTensorValue(
           indices=[[0, 0, 0], [0, 1, 0], [0, 2, 0], [0, 3, 0], [1, 0, 0],
                    [1, 1, 0], [1, 2, 0], [1, 3, 0], [2, 0, 0], [2, 1, 0],
@@ -269,7 +265,7 @@ class WindowDatasetTest(test.TestCase, parameterized.TestCase):
     next_element = iterator.get_next()
 
     with self.cached_session() as sess:
-      sess.run(iterator.initializer)
+      self.evaluate(iterator.initializer)
       with self.assertRaisesRegexp(
           errors.InvalidArgumentError,
           r"Cannot batch tensors with different shapes in component 0. "
@@ -285,8 +281,8 @@ class WindowDatasetTest(test.TestCase, parameterized.TestCase):
     get_next = dataset.make_one_shot_iterator().get_next()
 
     with self.cached_session() as sess:
-      self.assertAllEqual(np.float32([1., 2.]), sess.run(get_next))
-      self.assertAllEqual(np.float32([2., 3.]), sess.run(get_next))
+      self.assertAllEqual(np.float32([1., 2.]), self.evaluate(get_next))
+      self.assertAllEqual(np.float32([2., 3.]), self.evaluate(get_next))
       with self.assertRaises(errors.OutOfRangeError):
         sess.run(get_next)
 

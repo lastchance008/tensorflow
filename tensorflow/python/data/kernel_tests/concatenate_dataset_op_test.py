@@ -19,6 +19,7 @@ from __future__ import print_function
 
 import numpy as np
 
+from tensorflow.python.data.kernel_tests import test_base
 from tensorflow.python.data.ops import dataset_ops
 from tensorflow.python.data.util import nest
 from tensorflow.python.framework import errors
@@ -26,7 +27,7 @@ from tensorflow.python.framework import tensor_shape
 from tensorflow.python.platform import test
 
 
-class ConcatenateDatasetTest(test.TestCase):
+class ConcatenateDatasetTest(test_base.DatasetTestBase):
 
   def testConcatenateDataset(self):
     input_components = (
@@ -50,9 +51,9 @@ class ConcatenateDatasetTest(test.TestCase):
     get_next = iterator.get_next()
 
     with self.cached_session() as sess:
-      sess.run(init_op)
+      self.evaluate(init_op)
       for i in range(9):
-        result = sess.run(get_next)
+        result = self.evaluate(get_next)
         if i < 4:
           for component, result_component in zip(input_components, result):
             self.assertAllEqual(component[i], result_component)
@@ -84,9 +85,9 @@ class ConcatenateDatasetTest(test.TestCase):
     get_next = iterator.get_next()
 
     with self.cached_session() as sess:
-      sess.run(init_op)
+      self.evaluate(init_op)
       for i in range(9):
-        result = sess.run(get_next)
+        result = self.evaluate(get_next)
         if i < 4:
           for component, result_component in zip(input_components, result):
             self.assertAllEqual(component[i], result_component)

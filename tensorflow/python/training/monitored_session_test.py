@@ -69,8 +69,8 @@ class ScaffoldTest(test.TestCase):
   def test_defaults_empty_graph(self):
     with ops.Graph().as_default():
       scaffold = monitored_session.Scaffold()
-      variables.Variable(1, name='my_var')
-      variables.Variable(
+      variables.VariableV1(1, name='my_var')
+      variables.VariableV1(
           2, name='my_local_var', collections=[ops.GraphKeys.LOCAL_VARIABLES])
       scaffold.finalize()
       self.assertTrue(isinstance(scaffold.init_op, ops.Operation))
@@ -105,7 +105,7 @@ class ScaffoldTest(test.TestCase):
 
   def test_caches_values(self):
     with ops.Graph().as_default():
-      variables.Variable([1])
+      variables.VariableV1([1])
       scaffold1 = monitored_session.Scaffold()
       scaffold1.finalize()
       scaffold2 = monitored_session.Scaffold()
@@ -119,7 +119,7 @@ class ScaffoldTest(test.TestCase):
 
   def test_raise_error_if_more_than_one_cached_item(self):
     with ops.Graph().as_default():
-      variables.Variable([1])
+      variables.VariableV1([1])
       ops.add_to_collection(ops.GraphKeys.SAVERS, saver_lib.Saver())
       ops.add_to_collection(ops.GraphKeys.SAVERS, saver_lib.Saver())
       with self.assertRaisesRegexp(RuntimeError, 'More than one item'):
@@ -127,7 +127,7 @@ class ScaffoldTest(test.TestCase):
 
   def test_uses_passed_values(self):
     with ops.Graph().as_default():
-      variables.Variable([1])
+      variables.VariableV1([1])
       saver = saver_lib.Saver()
       scaffold = monitored_session.Scaffold(
           init_op=2,
@@ -148,7 +148,7 @@ class ScaffoldTest(test.TestCase):
 
   def test_graph_is_finalized(self):
     with ops.Graph().as_default():
-      variables.Variable([1])
+      variables.VariableV1([1])
       monitored_session.Scaffold().finalize()
       with self.assertRaisesRegexp(RuntimeError,
                                    'Graph is finalized and cannot be modified'):
@@ -157,7 +157,7 @@ class ScaffoldTest(test.TestCase):
   def test_new_scaffold_from_default_scaffold(self):
     scaffold1 = monitored_session.Scaffold()
     with ops.Graph().as_default():
-      variables.Variable([1])
+      variables.VariableV1([1])
       saver = saver_lib.Saver()
       scaffold2 = monitored_session.Scaffold(
           init_op=2,
@@ -180,7 +180,7 @@ class ScaffoldTest(test.TestCase):
 
   def test_new_scaffold_from_existing_scaffold(self):
     with ops.Graph().as_default():
-      variables.Variable([1])
+      variables.VariableV1([1])
       saver = saver_lib.Saver()
       scaffold1 = monitored_session.Scaffold(
           init_op=2,
@@ -1178,7 +1178,7 @@ class HookedSessionTest(test.TestCase):
       mock_run = FakeSession(sess)
       mon_sess = monitored_session._HookedSession(sess=mock_run, hooks=[])
       a_tensor = constant_op.constant([0], name='a_tensor')
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
       output = mon_sess.run(fetches=a_tensor,
                             feed_dict='a_feed',
                             options='an_option',
@@ -1197,7 +1197,7 @@ class HookedSessionTest(test.TestCase):
       mon_sess = monitored_session._HookedSession(
           sess=sess, hooks=[mock_hook, mock_hook2])
       a_tensor = constant_op.constant([0], name='a_tensor')
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
       mon_sess.run(a_tensor)
 
       for hook in [mock_hook, mock_hook2]:
@@ -1222,7 +1222,7 @@ class HookedSessionTest(test.TestCase):
       mon_sess = monitored_session._HookedSession(
           sess=sess, hooks=[mock_hook, mock_hook2])
       constant_op.constant([0], name='a_tensor')
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
 
       mon_sess.run(fetches='a_tensor')
       self.assertFalse(mon_sess.should_stop())
@@ -1242,7 +1242,7 @@ class HookedSessionTest(test.TestCase):
       third_tensor = constant_op.constant([10], name='third_tensor')
       mock_hook.request = session_run_hook.SessionRunArgs([another_tensor])
       mock_hook2.request = session_run_hook.SessionRunArgs([third_tensor])
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
 
       output = mon_sess.run(fetches=a_tensor)
       self.assertEqual(output, [0])
@@ -1262,7 +1262,7 @@ class HookedSessionTest(test.TestCase):
           None, feed_dict={a_tensor: [5]})
       mock_hook2.request = session_run_hook.SessionRunArgs(
           None, feed_dict={b_tensor: [10]})
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
 
       self.assertEqual(mon_sess.run(fetches=add_tensor), [15])
 
@@ -1280,7 +1280,7 @@ class HookedSessionTest(test.TestCase):
           None, feed_dict={a_tensor: [5]})
       mock_hook2.request = session_run_hook.SessionRunArgs(
           None, feed_dict={b_tensor: [10]})
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
 
       feed_dict = {c_tensor: [20]}
       self.assertEqual(
@@ -1301,7 +1301,7 @@ class HookedSessionTest(test.TestCase):
           None, feed_dict={a_tensor: [5]})
       mock_hook2.request = session_run_hook.SessionRunArgs(
           None, feed_dict={a_tensor: [10]})
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
 
       with self.assertRaisesRegexp(RuntimeError, 'Same tensor is fed'):
         mon_sess.run(fetches=add_tensor)
@@ -1319,7 +1319,7 @@ class HookedSessionTest(test.TestCase):
           None, feed_dict={a_tensor: [5]})
       mock_hook2.request = session_run_hook.SessionRunArgs(
           None, feed_dict={b_tensor: [10]})
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
 
       with self.assertRaisesRegexp(RuntimeError, 'Same tensor is fed'):
         mon_sess.run(fetches=add_tensor, feed_dict={b_tensor: [10]})
@@ -1374,7 +1374,7 @@ class MonitoredSessionTest(test.TestCase):
 
   def test_defaults(self):
     with ops.Graph().as_default():
-      a_var = variables.Variable(0)
+      a_var = variables.VariableV1(0)
       with monitored_session.MonitoredSession() as session:
         self.assertEqual(0, session.run(a_var))
 
@@ -1700,7 +1700,7 @@ class MonitoredSessionTest(test.TestCase):
 
   def test_graph_finalized_during_run_unfinalized_after_exit(self):
     with ops.Graph().as_default() as g:
-      a_var = variables.Variable(0)
+      a_var = variables.VariableV1(0)
       with monitored_session.MonitoredSession() as session:
         self.assertEqual(0, session.run(a_var))
         self.assertTrue(g.finalized)
@@ -1708,7 +1708,7 @@ class MonitoredSessionTest(test.TestCase):
 
   def test_keep_finalized_graph_as_finalized(self):
     with ops.Graph().as_default() as g:
-      a_var = variables.Variable(0)
+      a_var = variables.VariableV1(0)
       monitored_session.Scaffold().finalize()
       with monitored_session.MonitoredSession() as session:
         self.assertEqual(0, session.run(a_var))
@@ -2032,7 +2032,7 @@ class MonitoredSessionTest(test.TestCase):
     with ops.Graph().as_default():
       c = array_ops.placeholder(dtypes.float32)
       v = array_ops.identity(c)
-      graph_state = variables.Variable(0.0)
+      graph_state = variables.VariableV1(0.0)
       graph_side_effect = state_ops.assign_add(graph_state, 0.31)
 
       def step_fn(step_context):
@@ -2088,7 +2088,7 @@ class MonitoredSessionTest(test.TestCase):
       c = array_ops.placeholder(dtypes.float32)
       v = array_ops.identity(c)
       vv = constant_op.constant(3.2)
-      graph_state = variables.Variable(0.0)
+      graph_state = variables.VariableV1(0.0)
       graph_side_effect = state_ops.assign_add(graph_state, 0.31)
 
       class Hook(session_run_hook.SessionRunHook):
@@ -2125,7 +2125,7 @@ class SingularMonitoredSessionTest(test.TestCase):
 
   def test_handles_initialization(self):
     with ops.Graph().as_default():
-      a_var = variables.Variable(0)
+      a_var = variables.VariableV1(0)
       with monitored_session.SingularMonitoredSession() as session:
         # If it's not initialized, following statement raises an error.
         self.assertEqual(0, session.run(a_var))

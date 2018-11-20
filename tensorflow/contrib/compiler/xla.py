@@ -19,17 +19,22 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import contextlib
 from six.moves import xrange  # pylint: disable=redefined-builtin
 
 from tensorflow.compiler.jit.ops import xla_ops
-from tensorflow.contrib.tpu.python.tpu import tpu_function
 from tensorflow.core.framework import attr_value_pb2
+from tensorflow.python.estimator import model_fn as model_fn_lib
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
+from tensorflow.python.ops import summary_op_util
 from tensorflow.python.ops import variable_scope
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.util import compat
+from tensorflow.python.util import function_utils
+from tensorflow.python.util import tf_decorator
+from tensorflow.python.util import tf_inspect
 
 _XLA_COMPILE_ATTR = '_xla_compile_id'
 _MAX_WARNING_LINES = 5
@@ -174,14 +179,11 @@ class XLACompileContext(control_flow_ops.XLAControlFlowContext):
     if external_control_inputs:
       # Use an identity to pull control inputs as data inputs. Note that we
       # ignore ops which don't have outputs. TODO(phawkins): fix that.
-      with ops.control_dependencies(None):
-        self.Enter()
-        external_control_inputs = [
-            array_ops.identity(x.outputs[0]).op
-            for x in external_control_inputs
-            if x.outputs
-        ]
-        self.Exit()
+      external_control_inputs = [
+          array_ops.identity(x.outputs[0]).op
+          for x in external_control_inputs
+          if x.outputs
+      ]
       # pylint: disable=protected-access
       op._add_control_inputs(external_control_inputs)
       # pylint: enable=protected-access
@@ -261,13 +263,13 @@ def _compile_internal(computation, inputs=None):
   inputs = [ops.convert_to_tensor(x) for x in inputs]
   input_arity = len(inputs)
 
-  arg_error = tpu_function.check_function_argument_count(
+  arg_error = check_function_argument_count(
       computation, input_arity, infeed_queue=None)
   if arg_error is not None:
     raise TypeError(
         'Supplied computation cannot be called with the specified inputs. You '
         'specified %d inputs: %s, but the computation needs %s' %
-        (input_arity, str([i.name for i in inputs[0]]), arg_error))
+        (input_arity, str([i.name for i in inputs]), arg_error))
 
   cluster_name = ops.get_default_graph().unique_name('cluster')
   pivot = control_flow_ops.no_op(name=cluster_name + '/pivot')
@@ -288,7 +290,8 @@ def _compile_internal(computation, inputs=None):
     saved_use_resource = vscope.use_resource
     vscope.set_use_resource(True)
 
-    outputs = computation(*computation_inputs)
+    with _disable_summary_context():
+      outputs = computation(*computation_inputs)
 
     # Restore variable scope after computation.
     vscope.set_use_resource(saved_use_resource)
@@ -353,3 +356,337 @@ def _compile_internal(computation, inputs=None):
           array_ops.identity(outputs[i], name='output_%d' % i)
           for i in xrange(output_arity)
       ]
+
+
+@contextlib.contextmanager
+def _disable_summary_context():
+  """Enters a context where all summary ops are skipped.
+
+  Summaries are not yet supported in xla.compile(). So we provide this context
+  manager that can skip creating summary ops. This is a temporary workaround due
+  to XLA not supporting summary ops.
+
+  Yields:
+    None.
+  """
+  original_skip_summary_func = summary_op_util.skip_summary
+  summary_op_util.skip_summary = lambda: True
+
+  try:
+    yield
+  finally:
+    summary_op_util.skip_summary = original_skip_summary_func
+
+
+class _CapturedObject(object):
+  """A placeholder to capture an object."""
+
+  def __init__(self):
+    self._object = None
+
+  def capture(self, o):
+    if self._object:
+      raise RuntimeError(
+          'InternalError: _CapturedObject can capture only once. Please file '
+          'bug.')
+
+    self._object = o
+
+  def get(self):
+    return self._object
+
+
+def _get_scaffold(captured_scaffold_fn):
+  """Retrieves the Scaffold from `captured_scaffold_fn`."""
+  scaffold_fn = captured_scaffold_fn.get()
+
+  if not scaffold_fn:
+    return None
+
+  scaffold = scaffold_fn()
+  if scaffold is None:
+    raise ValueError(
+        'TPUEstimatorSpec.scaffold_fn returns None, which is not allowed')
+
+  return scaffold
+
+
+class _ModelFnWrapper(object):
+  """_ModelFnWrapper supports executing model_fn with XLA."""
+
+  def __init__(self, function):
+    self._model_fn = function
+
+  def __call__(self, features, labels, mode, params):
+
+    # TPUEstimator compiles model_fn when use_tpu=True. To avoid double
+    # compilation, we use this params['use_tpu'] as a hint. When it is set to
+    # True, model_fn is called without compilation.
+    # Note that this condition isn't accurate for the case of exporting a model.
+    # In that case we should ideally not compile so that user can see detailed
+    # graph. However, we don't have enough information to tell whether model_fn
+    # is being called for export mode or not.
+    # TODO(ycao): Make this condition more accurate when implementing PREDICT
+    # mode.
+    if params.get('use_tpu'):
+      return self._call_model_fn(features, labels, mode, params)
+
+    if mode == model_fn_lib.ModeKeys.TRAIN:
+      train_step, captured_scaffold_fn = self._make_train_step(
+          features, labels, params)
+      (loss,) = compile(train_step)
+      return model_fn_lib.EstimatorSpec(
+          mode=mode,
+          loss=loss,
+          train_op=array_ops.identity(loss),
+          scaffold=_get_scaffold(captured_scaffold_fn))
+    elif mode == model_fn_lib.ModeKeys.EVAL:
+      eval_step, captured_eval_metric_fn, captured_scaffold_fn = (
+          self._make_eval_step(features, labels, params))
+      outputs = compile(eval_step)
+      loss = outputs[0]
+
+      # Calculate eval_metric_ops if eval_metric_fn is set and captured.
+      eval_metric_fn = captured_eval_metric_fn.get()
+      if eval_metric_fn:
+        eval_metric_fn_tensors = outputs[1:]
+        eval_metric_ops = eval_metric_fn(*eval_metric_fn_tensors)
+      else:
+        eval_metric_ops = None
+
+      return model_fn_lib.EstimatorSpec(
+          mode=mode,
+          loss=loss,
+          eval_metric_ops=eval_metric_ops,
+          scaffold=_get_scaffold(captured_scaffold_fn))
+    else:
+      raise NotImplementedError('%s is not implemented, only TRAIN and EVAL are'
+                                ' supported' % mode)
+
+  def _make_train_step(self, features, labels, params):
+    """Creates a single step of training for xla.compile()."""
+    captured_scaffold_fn = _CapturedObject()
+
+    def train_step():
+      """A single step of training."""
+      estimator_spec = self._call_model_fn(features, labels,
+                                           model_fn_lib.ModeKeys.TRAIN, params)
+
+      try:
+        captured_scaffold_fn.capture(estimator_spec.scaffold_fn)
+      except AttributeError:
+        captured_scaffold_fn.capture(None)
+
+      # train_step will be run by xla.compile(). xla.compile() only supports
+      # tensor output while train_op can be either an operation or a tensor.
+      # Even though xla.compile() automatically adds operation-typed train_op as
+      # control dependency of other tensor outputs, it doesn't do so for
+      # tensor-typed train_op. Thus, we need to set it explicitly here.
+      with ops.control_dependencies([estimator_spec.train_op]):
+        return array_ops.identity(estimator_spec.loss)
+
+    return train_step, captured_scaffold_fn
+
+  def _make_eval_step(self, features, labels, params):
+    """Creates a single step of evaluation for xla.compile()."""
+    captured_eval_metric_fn = _CapturedObject()
+    captured_scaffold_fn = _CapturedObject()
+
+    def eval_step():
+      """A single step of evaluation."""
+      estimator_spec = self._call_model_fn(features, labels,
+                                           model_fn_lib.ModeKeys.EVAL, params)
+
+      try:
+        captured_scaffold_fn.capture(estimator_spec.scaffold_fn)
+      except AttributeError:
+        captured_scaffold_fn.capture(None)
+
+      eval_metric_fn = None
+      eval_metric_fn_tensors = []
+      try:
+        if estimator_spec.eval_metrics:
+          (eval_metric_fn, eval_metric_fn_tensors) = estimator_spec.eval_metrics
+      except AttributeError:
+        pass
+
+      # If a dictionary is provided, we need to convert it into a list sorted
+      # according to order of eval_metric_fn positional arguments.
+      if isinstance(eval_metric_fn_tensors, dict):
+        eval_metric_fn_args = function_utils.fn_args(eval_metric_fn)
+        eval_metric_fn_tensors = [
+            eval_metric_fn_tensors[i] for i in eval_metric_fn_args
+        ]
+
+      captured_eval_metric_fn.capture(eval_metric_fn)
+
+      return tuple([estimator_spec.loss] + eval_metric_fn_tensors)
+
+    return eval_step, captured_eval_metric_fn, captured_scaffold_fn
+
+  def _call_model_fn(self, features, labels, mode, params):
+    """Calls the model_fn with required parameters."""
+    model_fn_args = function_utils.fn_args(self._model_fn)
+    kwargs = {}
+
+    if 'labels' in model_fn_args:
+      kwargs['labels'] = labels
+    elif labels is not None:
+      raise ValueError(
+          'model_fn does not take labels, but input_fn returns labels.')
+    if 'mode' in model_fn_args:
+      kwargs['mode'] = mode
+
+    if 'params' in model_fn_args:
+      kwargs['params'] = params
+
+    return self._verify_estimator_spec(
+        self._model_fn(features=features, **kwargs))
+
+  def _verify_estimator_spec(self, estimator_spec):
+    """Verifies estimator spec contains correct data."""
+    # TODO(ycao): Implement estimator spec verification for other modes.
+
+    try:
+      if estimator_spec.scaffold:
+        logging.warning('EstimatorSpec.scaffold is ignored with XLA compilation'
+                        '. Please use TPUEstimatorSpec.scaffold_fn instead.')
+    except AttributeError:
+      pass
+
+    try:
+      if estimator_spec.eval_metric_ops:
+        raise ValueError('EstimatorSpec.eval_metric_ops is not supported with '
+                         'XLA compilation. Please use '
+                         'TPUEstimatorSpec.eval_metrics instead.')
+    except AttributeError:
+      pass
+
+    if estimator_spec.mode == model_fn_lib.ModeKeys.EVAL:
+      # If estimator_spec is of type TPUEstimatorSpec and contains eval_metrics,
+      # check that eval_metrics contains eval_metric_fn and
+      # eval_metric_fn_tensors with matching arguments.
+      try:
+        eval_metrics = estimator_spec.eval_metrics
+      except AttributeError:
+        eval_metrics = None
+
+      if eval_metrics:
+        (eval_metric_fn, eval_metric_fn_tensors) = eval_metrics
+        eval_metric_fn_args = function_utils.fn_args(eval_metric_fn)
+
+        if isinstance(eval_metric_fn_tensors, dict):
+          missing_tensors = [
+              i for i in eval_metric_fn_args if i not in eval_metric_fn_tensors
+          ]
+          additional_tensors = [
+              i for i in eval_metric_fn_tensors if i not in eval_metric_fn_args
+          ]
+
+          if missing_tensors:
+            raise ValueError('Arguments %s are needed by metric_fn (first '
+                             'element of TPUEstimatorSpec.eval_metrics) but '
+                             'they are not provided by evaluation tensors '
+                             '(second element of TPUEstimatorSpec.eval_metrics)'
+                             '.' % missing_tensors)
+
+          if additional_tensors:
+            raise ValueError('Arguments %s are provided by evaluation tensors '
+                             '(second element of TPUEstimatorSpec.eval_metrics)'
+                             ' but they are not needed by metric_fn (first '
+                             'element of TPUEstimatorSpec.eval_metrics).' %
+                             additional_tensors)
+
+    return estimator_spec
+
+
+def estimator_model_fn(target_model_fn=None):
+  """estimator_model_fn decorates a model_fn to be compiled for execution.
+
+  Currently it only works with `TPUEstimator`. If you need to use it with base
+  `Estimator`, please add `tf.enable_resource_variables()` at the beginning of
+  your program.
+
+  Example 1, decorating model_fn:
+  ```
+  @xla.estimator_model_fn()
+  def model_fn(features, labels, mode, params):
+    ...
+    return EstimatorSpec(...)
+
+
+  est = Estimator(model_fn=model_fn, ...)
+  est.train(...)
+
+  ```
+
+  Example 2, decorator as function:
+  ```
+  def model_fn(features, labels, mode, params):
+    ...
+    return EstimatorSpec(...)
+
+  est = Estimator(model_fn=xla.estimator_model_fn(model_fn), ...)
+  est.train(...)
+  ```
+
+  Args:
+    target_model_fn: model_fn to be decorated. This is only needed when
+      decorator is used in function call form (example 2).
+
+  Returns:
+    Decorated target_model_fn.
+  """
+
+  def decorated(function):
+    return tf_decorator.make_decorator(function, _ModelFnWrapper(function))
+
+  return decorated(target_model_fn) if target_model_fn else decorated
+
+
+def check_function_argument_count(func, input_arity, infeed_queue):
+  """Validate the number of input arguments to an XLA function.
+
+  Args:
+    func: the Python function that will be called to generate the body of an XLA
+      computation graph.
+    input_arity: the number of explicit arguments supplied by the caller.
+    infeed_queue: if not None, the infeed queue that will supply
+      additional arguments to the function.
+
+  Returns:
+    None if function can be called with the supplied number of
+      arguments, or an error string if it cannot.
+  """
+  def format_error(complaint, quantity):
+    return '%s %d argument%s' % (complaint, quantity, ''
+                                 if quantity == 1 else 's')
+
+  num_args_supplied = input_arity
+  if infeed_queue is not None:
+    num_args_supplied += infeed_queue.number_of_tuple_elements
+  arg_spec = tf_inspect.getargspec(func)
+  num_func_args = len(arg_spec.args)
+  if arg_spec.defaults is None:
+    num_func_defaults = 0
+  else:
+    num_func_defaults = len(arg_spec.defaults)
+  min_func_args = num_func_args - num_func_defaults
+  if num_args_supplied < min_func_args:
+    # The required number of arguments is not enough to call the function.
+    if num_func_defaults == 0 and arg_spec.varargs is None:
+      return format_error('exactly', num_func_args)
+    else:
+      return format_error('at least', min_func_args)
+  if arg_spec.varargs is None and num_args_supplied > num_func_args:
+    # The required number of arguments is too many to call the function.
+    if num_func_defaults == 0:
+      return format_error('exactly', num_func_args)
+    else:
+      return format_error('at most', num_func_args)
+  # Reaching here means either
+  # 1) There are varargs, func can accept any number of arguments greater than
+  # the minimum.
+  # 2) Number of supplied arguments falls in range of acceptable argument count
+  # of func.
+  return None

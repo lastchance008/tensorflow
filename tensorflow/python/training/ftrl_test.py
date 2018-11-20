@@ -113,11 +113,13 @@ class FtrlOptimizerTest(test.TestCase):
         sgd_op = ftrl.FtrlOptimizer(1.0).minimize(loss)
         variables.global_variables_initializer().run()
         # Fetch params to validate initial values
-        self.assertAllCloseAccordingToType([[1.0, 2.0]], var0.eval())
+        self.assertAllCloseAccordingToType([[1.0, 2.0]], self.evaluate(var0))
         # Run 1 step of sgd
         sgd_op.run()
         # Validate updated params
-        self.assertAllCloseAccordingToType([[0, 1]], var0.eval(), atol=0.01)
+        self.assertAllCloseAccordingToType([[0, 1]],
+                                           self.evaluate(var0),
+                                           atol=0.01)
 
   def testFtrlWithL1(self):
     for dtype in [dtypes.half, dtypes.float32]:
@@ -218,7 +220,7 @@ class FtrlOptimizerTest(test.TestCase):
   def testFtrlWithL1_L2_L2ShrinkageSparse(self):
     """Tests the new FTRL op with support for l2 shrinkage on sparse grads."""
     for dtype in [dtypes.half, dtypes.float32]:
-      with self.test_session() as sess:
+      with self.cached_session() as sess:
         var0 = variables.Variable([[1.0], [2.0]], dtype=dtype)
         var1 = variables.Variable([[4.0], [3.0]], dtype=dtype)
         grads0 = ops.IndexedSlices(
@@ -252,7 +254,7 @@ class FtrlOptimizerTest(test.TestCase):
   def testFtrlWithL2ShrinkageDoesNotChangeLrSchedule(self):
     """Verifies that l2 shrinkage in FTRL does not change lr schedule."""
     for dtype in [dtypes.half, dtypes.float32]:
-      with self.test_session() as sess:
+      with self.cached_session() as sess:
         var0 = variables.Variable([1.0, 2.0], dtype=dtype)
         var1 = variables.Variable([1.0, 2.0], dtype=dtype)
         grads0 = constant_op.constant([0.1, 0.2], dtype=dtype)

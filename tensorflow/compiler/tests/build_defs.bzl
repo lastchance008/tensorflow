@@ -50,6 +50,8 @@ def tf_xla_py_test(
     """
     if disabled_backends == None:
         disabled_backends = []
+    if type(disabled_backends) != "list":
+        fail("disabled_backends must be a list of strings", "disabled_backends")
 
     enabled_backends = [b for b in all_backends() if b not in disabled_backends]
     test_names = []
@@ -62,12 +64,12 @@ def tf_xla_py_test(
         if backend == "cpu":
             backend_args += [
                 "--test_device=XLA_CPU",
-                "--types=DT_HALF,DT_FLOAT,DT_DOUBLE,DT_UINT8,DT_INT8,DT_INT32,DT_INT64,DT_BOOL,DT_COMPLEX64",
+                "--types=DT_HALF,DT_FLOAT,DT_DOUBLE,DT_UINT8,DT_QUINT8,DT_INT8,DT_QINT8,DT_INT32,DT_QINT32,DT_INT64,DT_BOOL,DT_COMPLEX64",
             ]
         elif backend == "gpu":
             backend_args += [
                 "--test_device=XLA_GPU",
-                "--types=DT_HALF,DT_FLOAT,DT_DOUBLE,DT_UINT8,DT_INT8,DT_INT32,DT_INT64,DT_BOOL,DT_COMPLEX64,DT_BFLOAT16",
+                "--types=DT_HALF,DT_FLOAT,DT_DOUBLE,DT_UINT8,DT_QUINT8,DT_INT8,DT_QINT8,DT_INT32,DT_QINT32,DT_INT64,DT_BOOL,DT_COMPLEX64,DT_BFLOAT16",
             ]
             backend_tags += tf_cuda_tests_tags()
         elif backend in plugins:

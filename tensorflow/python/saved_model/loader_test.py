@@ -47,10 +47,10 @@ class SavedModelLoaderTest(test.TestCase):
   def setUp(self):
     """Write test SavedModels to a temp directory."""
     with session.Session(graph=ops.Graph()) as sess:
-      x = variables.Variable(5, name="x")
-      y = variables.Variable(11, name="y")
+      x = variables.VariableV1(5, name="x")
+      y = variables.VariableV1(11, name="y")
       z = x + y
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
 
       foo_sig_def = signature_def_utils.build_signature_def(
           {"foo_input": utils.build_tensor_info(x)},
@@ -134,18 +134,18 @@ class SavedModelLoaderTest(test.TestCase):
   def test_restore_variables(self):
     loader = loader_impl.SavedModelLoader(SAVED_MODEL_WITH_MAIN_OP)
     with self.session(graph=ops.Graph()) as sess:
-      x = variables.Variable(0, name="x")
-      y = variables.Variable(0, name="y")
+      x = variables.VariableV1(0, name="x")
+      y = variables.VariableV1(0, name="y")
       z = x * y
 
-      sess.run(variables.global_variables_initializer())
+      self.evaluate(variables.global_variables_initializer())
 
       # There are variables to restore, so a saver must be created.
       with self.assertRaises(ValueError):
         loader.restore_variables(sess, None)
 
       loader.restore_variables(sess, tf_saver.Saver())
-      self.assertEqual(55, z.eval())
+      self.assertEqual(55, self.evaluate(z))
 
   def test_run_init_op(self):
     loader = loader_impl.SavedModelLoader(SAVED_MODEL_WITH_MAIN_OP)
@@ -186,8 +186,10 @@ class SavedModelLoaderTest(test.TestCase):
     """
     path = _get_export_dir("no_variable_saved_model")
     with session.Session(graph=ops.Graph()) as sess:
-      x = variables.Variable(5, name="x", collections=["not_global_variable"])
-      y = variables.Variable(11, name="y", collections=["not_global_variable"])
+      x = variables.VariableV1(
+          5, name="x", collections=["not_global_variable"])
+      y = variables.VariableV1(
+          11, name="y", collections=["not_global_variable"])
       self.assertFalse(variables._all_saveable_objects())
       z = x + y
       sess.run(variables.variables_initializer([x, y]))

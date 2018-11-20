@@ -17,7 +17,6 @@ limitations under the License.
 #define TENSORFLOW_CORE_FRAMEWORK_NODE_DEF_UTIL_H_
 
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "tensorflow/core/framework/attr_value_util.h"
@@ -49,6 +48,7 @@ extern const char* const kColocationGroupPrefix;
 // than a text-format proto.
 string SummarizeNode(const Node& node);
 string SummarizeNodeDef(const NodeDef& node_def);
+string SummarizeAttrs(const NodeDef& node_def);
 
 // Produces a formatted string pattern from the node which can uniquely identify
 // this node upstream to produce an informative error message. The pattern
@@ -249,6 +249,10 @@ const string& GetNodeAttrString(const AttrSlice& attrs, StringPiece attr_name);
 // REQUIRES: ValidateOpDef(op_def).ok()
 Status InputTypeForNode(const NodeDef& node_def, const OpDef& op_def,
                         int input_port, DataType* input_type);
+// Computes the input types for a specific node.
+// REQUIRES: ValidateOpDef(op_def).ok()
+Status InputTypesForNode(const NodeDef& node_def, const OpDef& op_def,
+                         DataTypeVector* inputs);
 // Computes the output type for a specific node output.
 // REQUIRES: ValidateOpDef(op_def).ok()
 Status OutputTypeForNode(const NodeDef& node_def, const OpDef& op_def,
